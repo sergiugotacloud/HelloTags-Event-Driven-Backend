@@ -239,40 +239,92 @@ Cost optimisation. A NAT Gateway in each AZ would provide AZ-level fault toleran
 
 ---
 
-## Known Issues & Debugging
+## Troubleshooting
 
-### EventBridge Targets Require Explicit Lambda Permissions
+### 1. Lambda not triggered from EventBridge
 
-Each EventBridge target (notification-handler, analytics-handler) requires a separate `aws_lambda_permission` resource granting the EventBridge rule ARN permission to invoke that specific function. A single permission is not shared across targets.
+Problem:
+EventBridge rule exists but Lambda not invoked
 
-**Symptom:** One Lambda invoked correctly, the other silently not triggered despite both targets configured in Terraform.
+Cause:
+Missing `aws_lambda_permission`
 
-**Fix:** Separate `aws_lambda_permission` per target with unique `statement_id` values.
-
----
-
-### Secrets Manager Cold Start Latency
-
-analytics-handler fetches RDS credentials from Secrets Manager on every cold start. At high invocation rates, this adds latency and cost.
-
-**Production fix:** Cache the secret in a module-level variable and refresh only when the cached value is older than a configurable TTL (e.g. 5 minutes).
-
----
-
-### EventBridge Envelope Wrapping
-
-When EventBridge delivers an event to Lambda, the original payload is nested under a `detail` key in the EventBridge envelope. Lambda does not receive the raw event body.
-
-**Pattern:**
-```python
-detail = event.get("detail", {})
-card_id = detail.get("card_id")
-timestamp = detail.get("timestamp")
+Fix:
+```hcl
+resource "aws_lambda_permission" "allow_eventbridge" {
+  statement_id  = "AllowExecutionFromEventBridge"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.analytics.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.rule.arn
+}
 ```
 
-Always log `json.dumps(event)` at the start of any new Lambda function consuming from EventBridge to inspect the actual payload structure before writing field access logic.
+---
+
+### 2. Lambda cannot reach EC2 (timeout)
+
+Problem:
+analytics-handler times out
+
+Cause:
+Wrong VPC / subnet / SG
+
+Fix:
+- Ensure Lambda is in same VPC
+- Use **private IP (10.x.x.x)**
+- Check SG allows outbound
 
 ---
+
+### 3. RDS connection fails
+
+Problem:
+EC2 cannot connect to PostgreSQL
+
+Cause:
+Security group misconfiguration
+
+Fix:
+- RDS SG must allow **5432 from EC2 SG**
+- Not from 0.0.0.0/0
+
+---
+
+### 4. API works but no data in DynamoDB
+
+Problem:
+200 response but table empty
+
+Cause:
+Wrong environment variable or IAM role
+
+Fix:
+- Verify `TABLE_NAME`
+- Ensure role has `dynamodb:PutItem`
+
+---
+
+## Production Improvements
+
+- Separate IAM roles per Lambda
+- Add DLQ for EventBridge
+- Secrets caching
+- RDS connection pooling
+- Move EC2 → ECS Fargate
+- Add API authentication
+- Add CI/CD pipeline
+
+---
+
+## Things I learned while building this
+
+1. EventBridge decoupling is critical for scalability  
+2. VPC networking is the hardest part, not Lambda  
+3. Private communication requires correct routing + SG  
+4. Secrets Manager is better than env vars  
+5. Debugging distributed systems = logs everywhere  
+
 
 ## Production Improvements
 
