@@ -201,6 +201,55 @@ terraform destroy   # Remove all resources · zero orphaned infrastructure
 
 ---
 
+## Screenshots (End-to-End Proof)
+
+### Infrastructure Provisioning
+![Backend](architecture/01-terraform-backend-created.png)  
+![Init](architecture/02-terraform-init-success.png)  
+![VPC](architecture/03-vpc-subnets-created.png)  
+![Apply](architecture/03-vpc-terraform-apply-success.png)
+
+### Security + Networking
+![Security Groups](architecture/04-security-groups-created.png)
+
+### Compute + Access
+![SSM](architecture/06-ec2-ssm-connected.png)  
+![Flask Running](architecture/21-ec2-flask-running.png)
+
+### Database
+![RDS Connection](architecture/07-ec2-connected-to-rds.png)  
+![RDS Data](architecture/22 - rds-analytics-data.png)
+
+### Secrets Management
+![Secrets](architecture/20-Secrets-Manager.png)
+
+### DynamoDB
+![Table](architecture/08-dynamodb-tap-events-table.png)  
+![After API](architecture/12-dynamodb-after-api.png)
+
+### Lambda
+![Lambdas](architecture/09-lambda-created.png)  
+![Tap Handler](architecture/16-lambda-tap-handler.png)  
+![Notification](architecture/17-lambda-notofication-handler.png)  
+![Analytics Code](architecture/15-lambda-analytics-code.png)  
+![Analytics Env](architecture/19-lambda-analytics-env.png)
+
+### API Gateway
+![API](architecture/10-api-gateway-created.png)  
+![Call](architecture/11-api-call-success.png)
+
+### Event System
+![Rule](architecture/13-eventbridge-rule.png)  
+![Targets](architecture/18-eventbridge-target.png)
+
+### Logs (Async Flow Proof)
+![Logs](architecture/14-notification-lambda-logs.png)
+
+### Teardown
+![Destroy](architecture/24-terraform-destroy.png)
+
+---
+
 ## Security Design
 
 **No public compute exposure.** All Lambda functions, EC2, and RDS run in private subnets. No resource has a public IP or is directly reachable from the internet.
@@ -302,18 +351,6 @@ Wrong environment variable or IAM role
 Fix:
 - Verify `TABLE_NAME`
 - Ensure role has `dynamodb:PutItem`
-
----
-
-## Production Improvements
-
-- Separate IAM roles per Lambda
-- Add DLQ for EventBridge
-- Secrets caching
-- RDS connection pooling
-- Move EC2 → ECS Fargate
-- Add API authentication
-- Add CI/CD pipeline
 
 ---
 
