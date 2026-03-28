@@ -1,4 +1,4 @@
-# HelloTags — Event-Driven Cloud Backend Architecture (AWS)
+# HelloTags - Event-Driven Cloud Backend Architecture (AWS)
 
 ### API Gateway · Lambda · DynamoDB · EventBridge · EC2 · RDS PostgreSQL · Secrets Manager · Terraform · Python
 
