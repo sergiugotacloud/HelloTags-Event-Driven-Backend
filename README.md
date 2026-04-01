@@ -386,3 +386,4 @@ AWS Certified Solutions Architect – Associate · AWS Cloud Practitioner
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-sergiu--gota--cloud-0A66C2?logo=linkedin)](https://linkedin.com/in/sergiu-gota-cloud)
 
 > Built as part of a cloud engineering portfolio to demonstrate production-style event-driven architecture on AWS — serverless ingestion, decoupled async processing, VPC-private compute, encrypted RDS persistence, and infrastructure as code.
+Feature branch change
