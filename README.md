@@ -1,4 +1,4 @@
-# HelloTags - Event-Driven Cloud Backend Architecture (AWS)
+# HelloTags - Event-Driven Cloud Backend (AWS)
 
 ### API Gateway · Lambda · DynamoDB · EventBridge · EC2 · RDS PostgreSQL · Secrets Manager · Terraform · Python
 
@@ -12,26 +12,13 @@
 
 ---
 
-## Overview
+## What this is
 
-HelloTags is a cloud backend for NFC-powered digital business cards. When a user taps an NFC card, an HTTP POST hits the API. Within milliseconds, the tap is stored in DynamoDB, an event is fired to EventBridge, a notification handler processes it asynchronously, and the analytics handler writes structured data to a PostgreSQL RDS instance via a VPC-internal Flask API running on EC2.
+HelloTags is an NFC digital business card startup I co-founded. The idea is simple: tap a card, get a digital profile. But every implementation I looked at had the same problem. The card works, the profile page loads, and that's it. No tap tracking, no analytics, no way to know if anyone actually engaged with it.
 
-The system demonstrates a production-style event-driven architecture: serverless ingestion at the edge, decoupled async processing via EventBridge, durable analytics storage in RDS, and zero public exposure of compute or database resources. All infrastructure is provisioned by Terraform and destroyed completely with a single command.
+This is the backend I built to fix that. Tap a card, it hits an API, gets stored in DynamoDB, fires an event to EventBridge, and fans out to a notification handler and an analytics handler that writes to PostgreSQL on RDS. The whole thing runs in private subnets with no public exposure on any compute or database resource.
 
-**Region:** eu-central-1 · **IaC:** Terraform with remote state on S3 + DynamoDB locking · **Access:** SSM Session Manager — no SSH, no bastion host
-
----
-
-## The Problem
-
-NFC digital business cards solve the physical card problem — but most implementations stop at the card itself. The profile page is static. There is no tap tracking, no analytics, no insight into who engaged and when. Business owners hand out cards and have no idea if they work.
-
-HelloTags adds the backend layer that makes NFC cards intelligent:
-
-- **Tap tracking** — every card interaction recorded in real time
-- **Event-driven processing** — taps trigger downstream workflows without tight coupling
-- **Analytics persistence** — structured tap data written to PostgreSQL for querying and reporting
-- **Secure admin access** — EC2 administration via SSM, never SSH, never public IP
+Region: eu-central-1. IaC: Terraform with remote state on S3 and DynamoDB locking. EC2 access via SSM, no SSH, no bastion.
 
 ---
 
@@ -41,136 +28,130 @@ HelloTags adds the backend layer that makes NFC cards intelligent:
 
 ```
 NFC Card Tap (HTTP POST)
-        │
-        ▼
+        |
+        v
 API Gateway (hellotags-public-api)
     POST /tap
-        │
-        ▼
-Lambda: tap-handler  ── Python 3.12 · VPC-attached · private subnet
-        │
-        ├──▶ DynamoDB (tap-events)  ── Immediate storage · card_id + timestamp key
-        │
-        └──▶ EventBridge (default bus)  ── Async event emission
-                    │  source: hellotags.tap
-                    │  DetailType: TapEvent
-                    ▼
+        |
+        v
+Lambda: tap-handler  -- Python 3.12, VPC-attached, private subnet
+        |
+        |---> DynamoDB (tap-events)  -- card_id + timestamp key
+        |
+        +---> EventBridge (default bus)  -- source: hellotags.tap
+                    |
             EventBridge Rule (tap-events-rule)
-                    │
-          ┌─────────┴──────────┐
-          ▼                    ▼
-Lambda: notification-handler   Lambda: analytics-handler
-(VPC · private subnet)        (VPC · private subnet)
-                                    │
-                                    ▼ HTTP (internal)
-                              EC2: Flask API  ── Private subnet · SSM access only
-                                    │
-                                    ▼
-                              RDS PostgreSQL  ── Private subnet · Multi-AZ capable
+                    |
+          +---------+---------+
+          v                   v
+Lambda: notification-handler  Lambda: analytics-handler
+(VPC, private subnet)        (VPC, private subnet)
+                                    |
+                                    v  HTTP internal
+                              EC2: Flask API  -- private subnet, SSM only
+                                    |
+                                    v
+                              RDS PostgreSQL  -- private subnet
                               (tap_analytics table)
 
-Infrastructure
-├── VPC 10.0.0.0/16
-│   ├── Public Subnet 10.0.1.0/24 (eu-central-1a)  ── IGW · NAT Gateway · Elastic IP
-│   ├── Private Subnet A 10.0.2.0/24 (eu-central-1a)  ── Lambda · EC2 · private route → NAT
-│   └── Private Subnet B 10.0.3.0/24 (eu-central-1b)  ── RDS (DB subnet group spans both AZs)
-│
-├── Security
-│   ├── EC2 SG  ── No inbound rules · egress only · SSM access
-│   └── RDS SG  ── Port 5432 from EC2 SG only
-│
-└── State Management
-    ├── S3 (hellotags-terraform-state)  ── Remote state storage · encrypted
-    └── DynamoDB (hellotags-terraform-locks)  ── State locking
+VPC 10.0.0.0/16
+  Public Subnet 10.0.1.0/24   -- IGW, NAT Gateway, Elastic IP
+  Private Subnet A 10.0.2.0/24 -- Lambda, EC2
+  Private Subnet B 10.0.3.0/24 -- RDS (spans both AZs)
+
+Security
+  EC2 SG  -- no inbound, egress only, SSM access
+  RDS SG  -- port 5432 from EC2 SG only
+
+State
+  S3 (hellotags-terraform-state)  -- encrypted remote state
+  DynamoDB (hellotags-terraform-locks)  -- state locking
 ```
 
 ---
 
-## Services Used
+## Services
 
-| Service | Role |
+| Service | What it does here |
 |---|---|
-| **Amazon API Gateway (HTTP)** | Exposes the public `POST /tap` endpoint |
-| **AWS Lambda — tap-handler** | Ingests tap event, writes to DynamoDB, fires EventBridge event |
-| **AWS Lambda — notification-handler** | Consumes EventBridge events, processes notifications |
-| **AWS Lambda — analytics-handler** | Consumes EventBridge events, POSTs to internal EC2 Flask API |
-| **Amazon DynamoDB** | Raw tap event storage — on-demand capacity, composite key (card_id + timestamp) |
-| **Amazon EventBridge** | Decouples tap-handler from downstream consumers via event routing rules |
-| **Amazon EC2 (Flask API)** | Internal analytics API — private subnet, SSM-managed, no public IP |
-| **Amazon RDS PostgreSQL** | Persistent analytics storage — encrypted, private subnet, Multi-AZ capable |
-| **AWS Secrets Manager** | RDS credentials injected at runtime — never hardcoded |
-| **AWS Systems Manager** | EC2 access via Session Manager — zero SSH exposure |
-| **Amazon VPC** | Network isolation — private subnets, NAT Gateway, IGW, security groups |
-| **Amazon CloudWatch** | Lambda execution logs across all three functions |
-| **AWS IAM** | Execution roles per function, EC2 SSM role, least-privilege policies |
-| **Terraform** | Full infrastructure provisioned and destroyed as code — remote state on S3 |
+| API Gateway (HTTP) | Public POST /tap endpoint |
+| Lambda: tap-handler | Writes to DynamoDB, fires EventBridge event |
+| Lambda: notification-handler | Picks up EventBridge events, handles notifications |
+| Lambda: analytics-handler | Picks up EventBridge events, POSTs to internal Flask API |
+| DynamoDB | Raw tap storage, on-demand, composite key |
+| EventBridge | Routes tap events to both Lambda consumers |
+| EC2 + Flask | Internal analytics API, private subnet, SSM only |
+| RDS PostgreSQL | Structured analytics storage, encrypted, private |
+| Secrets Manager | RDS credentials fetched at runtime, never hardcoded |
+| SSM Session Manager | EC2 access without SSH or public IP |
+| VPC | Full network isolation, private subnets, NAT, IGW |
+| CloudWatch | Lambda logs across all three functions |
+| IAM | Per-function execution roles, least privilege |
+| Terraform | Full stack provisioned and destroyed as code |
 
 ---
 
-## Processing Flow
+## How a tap flows through the system
 
-1. An NFC card is tapped, triggering an HTTP POST to the API Gateway `/tap` endpoint with a `card_id` payload
-2. API Gateway proxies the request to **tap-handler** Lambda (VPC-attached, private subnet)
-3. tap-handler generates a millisecond-precision timestamp, writes the record to DynamoDB (`card_id` + `timestamp` composite key), and fires a `TapEvent` to EventBridge with the card data in the event `detail`
-4. The HTTP 200 response is returned to the NFC client — storage is guaranteed before the response
-5. The EventBridge rule matches on `source: hellotags.tap` and fans out to two targets simultaneously:
-   - **notification-handler** — processes the tap event for downstream notification workflows
-   - **analytics-handler** — POSTs the tap data to the internal Flask API via HTTP over the private subnet
-6. The Flask API on EC2 receives the analytics payload and writes a record to the `tap_analytics` table in RDS PostgreSQL
-7. RDS credentials are fetched at runtime from Secrets Manager — never stored in environment variables or source code
-8. CloudWatch collects invocation logs and metrics from all three Lambda functions
+1. Card is tapped, triggers HTTP POST to API Gateway with a card_id payload
+2. tap-handler Lambda picks it up, generates a timestamp, writes to DynamoDB, fires a TapEvent to EventBridge
+3. HTTP 200 goes back to the client. DynamoDB write happens before the response returns
+4. EventBridge matches on `source: hellotags.tap` and fans out to both targets at the same time
+5. notification-handler processes the event for downstream notifications
+6. analytics-handler POSTs the tap data to the Flask API on EC2 over the private subnet
+7. Flask writes the record to RDS PostgreSQL
+8. RDS credentials come from Secrets Manager at runtime, not from env vars or source code
 
 ---
 
-## Project Structure
+## Project structure
 
 ```
 hellotags-cloud-backend/
-│
-├── architecture/
-│   └── hellotags-architecture.png          # End-to-end architecture diagram
-│
-├── lambda/
-│   ├── tap_handler.py                      # Ingest → DynamoDB + EventBridge
-│   ├── notification_handler.py             # EventBridge consumer → notifications
-│   └── analytics_handler.py               # EventBridge consumer → EC2 Flask API → RDS
-│
-├── terraform/
-│   ├── main.tf                             # VPC, subnets, IGW, NAT, route tables
-│   ├── api_gateway.tf                      # HTTP API, integration, route, stage, permission
-│   ├── lambda.tf                           # All three Lambda functions
-│   ├── dynamodb.tf                         # tap-events table
-│   ├── eventbridge.tf                      # Event rule and targets
-│   ├── ec2.tf                              # Admin EC2 instance, SSM role, instance profile
-│   ├── rds.tf                              # RDS PostgreSQL, DB subnet group, Secrets Manager
-│   ├── security_groups.tf                  # EC2 SG (egress only), RDS SG (5432 from EC2)
-│   ├── iam.tf                              # Lambda execution roles and policy attachments
-│   ├── backend.tf                          # S3 remote state + DynamoDB locking
-│   └── outputs.tf                          # API Gateway endpoint URL
-│
-├── .gitignore
-└── README.md
+|
++-- architecture/
+|   +-- hellotags-architecture.png
+|
++-- lambda/
+|   +-- tap_handler.py
+|   +-- notification_handler.py
+|   +-- analytics_handler.py
+|
++-- terraform/
+|   +-- main.tf
+|   +-- api_gateway.tf
+|   +-- lambda.tf
+|   +-- dynamodb.tf
+|   +-- eventbridge.tf
+|   +-- ec2.tf
+|   +-- rds.tf
+|   +-- security_groups.tf
+|   +-- iam.tf
+|   +-- backend.tf
+|   +-- outputs.tf
+|
++-- README.md
 ```
 
 ---
 
 ## Deployment
 
-### Prerequisites
+### Requirements
 
-- AWS CLI configured with appropriate credentials
-- Terraform >= 1.0 installed
+- AWS CLI configured
+- Terraform >= 1.0
 - S3 bucket and DynamoDB table for remote state must exist before `terraform init`
 
-### Provision
+### Spin it up
 
 ```bash
-terraform init      # Initialise S3 backend + download hashicorp/aws provider
-terraform plan      # Preview all resources before apply
-terraform apply     # Provision full stack
+terraform init
+terraform plan
+terraform apply
 ```
 
-### Test
+### Test a tap
 
 ```bash
 curl -X POST https://<your-api-id>.execute-api.eu-central-1.amazonaws.com/prod/tap \
@@ -178,71 +159,71 @@ curl -X POST https://<your-api-id>.execute-api.eu-central-1.amazonaws.com/prod/t
   -d '{"card_id": "card-abc-123"}'
 ```
 
-Expected response:
+Expected:
 ```json
 {"message": "tap recorded"}
 ```
 
-Within seconds: the record appears in DynamoDB, EventBridge delivers the event to both Lambda targets, and analytics-handler writes the tap to RDS PostgreSQL via the internal Flask API.
+Within a few seconds: record in DynamoDB, both Lambda targets fired, analytics row written to RDS PostgreSQL.
 
-### EC2 Admin Access (SSM)
+### EC2 access
 
 ```bash
 aws ssm start-session --target <instance-id> --region eu-central-1
 ```
 
-No SSH. No key pair. No public IP. No bastion. Access is entirely through AWS Systems Manager Session Manager.
+No SSH. No key pair. No public IP. SSM only.
 
-### Teardown
+### Tear it down
 
 ```bash
-terraform destroy   # Remove all resources · zero orphaned infrastructure
+terraform destroy
 ```
 
 ---
 
-## Screenshots (End-to-End Proof)
+## Screenshots
 
-### Infrastructure Provisioning
-![Backend](architecture/01-terraform-backend-created.png)  
-![Init](architecture/02-terraform-init-success.png)  
-![VPC](architecture/03-vpc-subnets-created.png)  
+### Infrastructure
+![Backend](architecture/01-terraform-backend-created.png)
+![Init](architecture/02-terraform-init-success.png)
+![VPC](architecture/03-vpc-subnets-created.png)
 ![Apply](architecture/03-vpc-terraform-apply-success.png)
 
-### Security + Networking
+### Security
 ![Security Groups](architecture/04-security-groups-created.png)
 
-### Compute + Access
-![SSM](architecture/06-ec2-ssm-connected.png)  
-![Flask Running](architecture/21-ec2-flask-running.png)
+### Compute and access
+![SSM](architecture/06-ec2-ssm-connected.png)
+![Flask](architecture/21-ec2-flask-running.png)
 
 ### Database
-![RDS Connection](architecture/07-ec2-connected-to-rds.png)  
-![RDS Data](architecture/22 - rds-analytics-data.png)
+![RDS Connection](architecture/07-ec2-connected-to-rds.png)
+![RDS Data](architecture/22-rds-analytics-data.png)
 
-### Secrets Management
+### Secrets
 ![Secrets](architecture/20-Secrets-Manager.png)
 
 ### DynamoDB
-![Table](architecture/08-dynamodb-tap-events-table.png)  
-![After API](architecture/12-dynamodb-after-api.png)
+![Table](architecture/08-dynamodb-tap-events-table.png)
+![After tap](architecture/12-dynamodb-after-api.png)
 
 ### Lambda
-![Lambdas](architecture/09-lambda-created.png)  
-![Tap Handler](architecture/16-lambda-tap-handler.png)  
-![Notification](architecture/17-lambda-notofication-handler.png)  
-![Analytics Code](architecture/15-lambda-analytics-code.png)  
-![Analytics Env](architecture/19-lambda-analytics-env.png)
+![All functions](architecture/09-lambda-created.png)
+![Tap handler](architecture/16-lambda-tap-handler.png)
+![Notification](architecture/17-lambda-notofication-handler.png)
+![Analytics code](architecture/15-lambda-analytics-code.png)
+![Analytics env](architecture/19-lambda-analytics-env.png)
 
 ### API Gateway
-![API](architecture/10-api-gateway-created.png)  
+![API](architecture/10-api-gateway-created.png)
 ![Call](architecture/11-api-call-success.png)
 
-### Event System
-![Rule](architecture/13-eventbridge-rule.png)  
+### EventBridge
+![Rule](architecture/13-eventbridge-rule.png)
 ![Targets](architecture/18-eventbridge-target.png)
 
-### Logs (Async Flow Proof)
+### Logs
 ![Logs](architecture/14-notification-lambda-logs.png)
 
 ### Teardown
@@ -250,55 +231,56 @@ terraform destroy   # Remove all resources · zero orphaned infrastructure
 
 ---
 
-## Security Design
+## Security decisions
 
-**No public compute exposure.** All Lambda functions, EC2, and RDS run in private subnets. No resource has a public IP or is directly reachable from the internet.
+No public compute. Every Lambda, EC2, and RDS runs in private subnets. Nothing has a public IP.
 
-**No SSH.** EC2 is accessed exclusively via SSM Session Manager. The EC2 security group has no inbound rules — egress only.
+No SSH. The EC2 security group has zero inbound rules. Access goes through SSM Session Manager, authenticated via IAM, logged to CloudWatch.
 
-**No hardcoded credentials.** RDS credentials are generated by Terraform (`random_password`), stored in Secrets Manager, and fetched at Lambda runtime via the AWS SDK. They never appear in source code or environment variables.
+No hardcoded credentials. RDS password is generated by Terraform, stored in Secrets Manager, fetched at runtime. It never touches an environment variable or source file.
 
-**Network isolation by security group.** RDS accepts connections on port 5432 from the EC2 security group only. Lambda functions share the EC2 security group for simplicity (production improvement: dedicated Lambda SG).
+RDS only accepts connections on port 5432 from the EC2 security group. Nothing else can reach it.
 
-**Encrypted at rest.** RDS storage encryption enabled. Secrets Manager encrypts credentials using AWS KMS by default.
-
-**Remote state with locking.** Terraform state is stored in S3 with server-side encryption and a DynamoDB lock table — preventing concurrent applies from corrupting state.
+Remote state is stored in S3 with server-side encryption. DynamoDB lock table prevents concurrent applies from corrupting state.
 
 ---
 
-## Engineering Decisions
+## Why I built it this way
 
-**Why EventBridge fan-out instead of direct Lambda invocation?**
-tap-handler emits a single event. EventBridge routes it to two consumers simultaneously — notification-handler and analytics-handler — without tap-handler knowing either exists. Adding a third consumer (a CRM integration, an audit log, a real-time dashboard) requires a new EventBridge target, not a code change to tap-handler. This is the correct decoupling pattern for extensible event-driven systems.
+**EventBridge fan-out instead of chaining Lambdas directly**
 
-**Why DynamoDB for raw tap events and RDS for analytics?**
-DynamoDB is the right store for raw tap ingestion: write-heavy, key-value access pattern, no joins, millisecond latency, zero operational overhead, on-demand pricing. RDS PostgreSQL is the right store for analytics: structured schema, queryable by time range and card, aggregatable with SQL. Each store matches its access pattern — using one for both would be a compromise.
+tap-handler fires one event and forgets. EventBridge routes it to notification-handler and analytics-handler at the same time, and tap-handler has no idea either of them exists. If I need a third consumer later, I add an EventBridge target. I don't touch tap-handler. That's the right pattern for anything that needs to scale without turning into spaghetti.
 
-**Why EC2 + Flask instead of Lambda for analytics writes?**
-The Flask API on EC2 represents a persistent service layer that owns the database connection pool and schema logic. This is a deliberate architectural choice to demonstrate a hybrid serverless + containerised-service pattern — Lambda handles stateless event processing, EC2 handles stateful service logic. In production this could be ECS Fargate with an ALB, but EC2 is the minimal viable equivalent for portfolio demonstration.
+**DynamoDB for raw taps, RDS for analytics**
 
-**Why SSM over SSH for EC2 access?**
-SSH requires open port 22, a key pair, and a public IP or bastion host. SSM requires none of these — access is authenticated via IAM, logged to CloudWatch, and auditable. The security group has zero inbound rules. This is the production-standard access pattern for private EC2 instances in AWS.
+DynamoDB made sense for tap ingestion: write-heavy, simple key-value access, no joins, millisecond latency. RDS made sense for analytics: structured schema, queryable by time range, aggregatable with SQL. Using one for both would mean compromising somewhere. Matching the store to the access pattern is the whole point.
 
-**Why Secrets Manager instead of environment variables for RDS credentials?**
-Environment variables in Lambda are visible in the console and included in function configuration exports. Secrets Manager stores credentials encrypted, access is controlled by IAM, and rotation can be enabled without redeploying the function. The credential fetch adds a single SDK call at cold start — an acceptable tradeoff for significantly stronger secrets hygiene.
+**EC2 + Flask instead of another Lambda for database writes**
 
-**Why a single NAT Gateway?**
-Cost optimisation. A NAT Gateway in each AZ would provide AZ-level fault tolerance for private subnet egress, but costs ~£30/month per gateway. For a development and portfolio project, a single NAT Gateway in the public subnet is the correct tradeoff. Documented explicitly — not an omission.
+The Flask API is a persistent service that owns the connection pool and schema logic. Lambda handles stateless event processing, EC2 handles stateful service logic. In production this would probably be ECS Fargate behind an ALB, but EC2 is the minimal version that demonstrates the same pattern.
+
+**SSM over SSH**
+
+SSH means open port 22, a key pair to manage, and either a public IP or a bastion host. SSM means none of those things. The security group has no inbound rules at all. Access is IAM-authenticated and logged. This is how private EC2 should be managed.
+
+**Secrets Manager over environment variables**
+
+Environment variables show up in the Lambda console and get included in function config exports. Secrets Manager stores them encrypted, access is controlled by IAM, and rotation works without redeploying anything. One extra SDK call at cold start is a fine tradeoff.
+
+**Single NAT Gateway**
+
+One NAT Gateway per AZ gives you AZ-level fault tolerance for private subnet egress. It also costs roughly 30 euros a month per gateway. For a dev project this is not worth it. Documented here on purpose, not overlooked.
 
 ---
 
-## Troubleshooting
+## Things that broke
 
-### 1. Lambda not triggered from EventBridge
+### Lambda not triggering from EventBridge
 
-Problem:
-EventBridge rule exists but Lambda not invoked
+EventBridge rule was configured, targets were set, Lambda was doing nothing. No errors anywhere, just silence.
 
-Cause:
-Missing `aws_lambda_permission`
+Turned out Lambda needs explicit permission to be invoked by EventBridge. Missing `aws_lambda_permission` resource in Terraform. EventBridge was trying to invoke it and getting silently denied.
 
-Fix:
 ```hcl
 resource "aws_lambda_permission" "allow_eventbridge" {
   statement_id  = "AllowExecutionFromEventBridge"
@@ -309,91 +291,58 @@ resource "aws_lambda_permission" "allow_eventbridge" {
 }
 ```
 
----
-
-### 2. Lambda cannot reach EC2 (timeout)
-
-Problem:
-analytics-handler times out
-
-Cause:
-Wrong VPC / subnet / SG
-
-Fix:
-- Ensure Lambda is in same VPC
-- Use **private IP (10.x.x.x)**
-- Check SG allows outbound
+This is a common one in EventBridge setups. The rule existing does not mean Lambda will accept the invocation.
 
 ---
 
-### 3. RDS connection fails
+### analytics-handler timing out trying to reach EC2
 
-Problem:
-EC2 cannot connect to PostgreSQL
+Lambda was invoking, hitting the timeout, failing. EC2 was running. Flask was running. Nothing obviously wrong.
 
-Cause:
-Security group misconfiguration
-
-Fix:
-- RDS SG must allow **5432 from EC2 SG**
-- Not from 0.0.0.0/0
+The Lambda was either in the wrong VPC, pointing at the wrong subnet, or using the public IP instead of the private one. Fixed by verifying the Lambda VPC config matched the EC2 VPC, switching to the private IP (10.x.x.x), and confirming the security group allowed outbound traffic. All three need to line up.
 
 ---
 
-### 4. API works but no data in DynamoDB
+### EC2 could not connect to RDS
 
-Problem:
-200 response but table empty
+Tried to connect from EC2 and got nothing. RDS was up, credentials were correct.
 
-Cause:
-Wrong environment variable or IAM role
-
-Fix:
-- Verify `TABLE_NAME`
-- Ensure role has `dynamodb:PutItem`
+The RDS security group was not allowing port 5432 from the EC2 security group. Classic mistake: people open 0.0.0.0/0 to fix it fast, which works but defeats the point. Fixed it properly by allowing 5432 from the EC2 SG ID specifically.
 
 ---
 
-## Things I learned while building this
+### API returning 200 but DynamoDB table empty
 
-1. EventBridge decoupling is critical for scalability  
-2. VPC networking is the hardest part, not Lambda  
-3. Private communication requires correct routing + SG  
-4. Secrets Manager is better than env vars  
-5. Debugging distributed systems = logs everywhere  
+Curl was returning 200. Table was empty. Lambda was not throwing errors.
 
-
-## Production Improvements
-
-- **Dedicated IAM roles per Lambda** — tap-handler needs only `dynamodb:PutItem` + `events:PutEvents`; analytics-handler needs only `secretsmanager:GetSecretValue`; currently all three share one role
-- **Dead-letter queue (DLQ)** — EventBridge target failures are silently dropped; a DLQ captures failed invocations for inspection and replay
-- **Secrets Manager caching** — module-level credential caching with TTL to reduce SDK calls and cold start latency
-- **RDS connection pooling** — psycopg2 connections should be managed with a pool (e.g. `psycopg2.pool.SimpleConnectionPool`) to avoid reconnecting on every Lambda invocation
-- **ALB + ECS Fargate for Flask API** — replaces the single EC2 instance with a managed, scalable, load-balanced container service
-- **Multi-AZ NAT Gateway** — one NAT Gateway per AZ for AZ-level egress fault tolerance
-- **API Gateway authorizer** — API key or IAM auth on `POST /tap` to prevent unauthenticated writes
-- **Input validation** — validate and sanitise `card_id` in tap-handler; reject malformed payloads at the Lambda layer with a 400 response
-- **GitHub Actions CI/CD** — Lambda zip, lint, and deploy on push to main
+Wrong TABLE_NAME environment variable, or the IAM role was missing `dynamodb:PutItem`. Both are easy to overlook and produce no visible error in the response. Checked the env var first, then the IAM policy. One of them was wrong.
 
 ---
 
-## Author
+## What I took away from this
 
-**Sergiu Gota**
-AWS Certified Solutions Architect – Associate · AWS Cloud Practitioner
+VPC networking was harder than any of the Lambda or EventBridge work. Getting the routing right across private subnets, NAT, security groups, and VPC-attached Lambdas took more debugging than everything else combined. Once that was solid, the rest connected quickly.
 
-[![GitHub](https://img.shields.io/badge/GitHub-sergiugotacloud-181717?logo=github)](https://github.com/sergiugotacloud)
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-sergiu--gota--cloud-0A66C2?logo=linkedin)](https://linkedin.com/in/sergiu-gota-cloud)
+EventBridge decoupling is genuinely useful, not just a pattern for pattern's sake. Being able to add a consumer without touching the producer is the kind of thing that sounds theoretical until you actually do it and realize how clean it keeps things.
 
-> Built as part of a cloud engineering portfolio to demonstrate production-style event-driven architecture on AWS — serverless ingestion, decoupled async processing, VPC-private compute, encrypted RDS persistence, and infrastructure as code.
-Feature branch change
-Another improvement
+Distributed systems are harder to debug because the failure can be silent at every layer. Lambda succeeds, EventBridge delivers, analytics-handler times out, nothing in the tap-handler logs shows anything wrong. Logs everywhere from the start, not as an afterthought.
 
-## Project Structure
-lambda/ - Lambda functions
-terraform/ - Infrastructure as Code
-architecture/ - diagrams
-YOLO test change
-pair test
-pair correct test
-pair final test
+---
+
+## What I would add in production
+
+- Dedicated IAM role per Lambda. Right now they share one role. tap-handler only needs `dynamodb:PutItem` and `events:PutEvents`. It should not have anything else.
+- Dead-letter queue on EventBridge targets. Failed invocations currently disappear. A DLQ captures them for inspection and replay.
+- Secrets Manager caching in Lambda. Right now it fetches on every cold start. Module-level caching with a TTL reduces the SDK calls.
+- RDS connection pooling. psycopg2 reconnects on every invocation. A simple connection pool fixes that.
+- ECS Fargate with ALB instead of EC2 for the Flask API. Managed, scalable, no instance to babysit.
+- NAT Gateway per AZ if this were handling real traffic.
+- API Gateway authorizer on POST /tap. Right now anyone can write to it.
+- Input validation in tap-handler. Malformed card_id payloads should get a 400, not a DynamoDB write attempt.
+- GitHub Actions for Lambda deploy on push to main.
+
+---
+
+**Sergiu Gota** - AWS SAA-C03 · CCP
+
+[GitHub](https://github.com/sergiugotacloud) · [LinkedIn](https://linkedin.com/in/sergiu-gota-cloud)
