@@ -343,6 +343,10 @@ Distributed systems are harder to debug because the failure can be silent at eve
 
 ---
 
-**Sergiu Gota** - AWS SAA-C03 · CCP
+## Author
 
-[GitHub](https://github.com/sergiugotacloud) · [LinkedIn](https://linkedin.com/in/sergiu-gota-cloud)
+**Sergiu Gota**
+AWS Certified Solutions Architect – Associate · AWS Cloud Practitioner
+
+[![GitHub](https://img.shields.io/badge/GitHub-sergiugotacloud-181717?logo=github)](https://github.com/sergiugotacloud)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-sergiu--gota--cloud-0A66C2?logo=linkedin)](https://linkedin.com/in/sergiu-gota-cloud)
